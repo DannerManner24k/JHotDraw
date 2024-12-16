@@ -1,0 +1,27 @@
+name: Maven CI Pipeline
+
+on:
+  pull_request:
+    branches: [ main, develop,  Dannermanner/ManageWindows ]
+  push:
+    branches: [ main, develop, Dannermanner/ManageWindows ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set Up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build with Maven
+        run: mvn clean install
+
+      - name: Run Tests
+        run: mvn test
