@@ -78,13 +78,14 @@ public class OpenFileAction extends AbstractApplicationAction {
 
     private static final long serialVersionUID = 1L;
     public static final String ID = "file.open";
+    private static final String LABELS_BUNDLE = "org.jhotdraw.app.Labels";
 
     /**
      * Creates a new instance.
      */
     public OpenFileAction(Application app) {
         super(app);
-        ResourceBundleUtil labels = ResourceBundleUtil.getBundle("org.jhotdraw.app.Labels");
+        ResourceBundleUtil labels = ResourceBundleUtil.getBundle(LABELS_BUNDLE);
         labels.configureAction(this, ID);
     }
 
@@ -96,122 +97,186 @@ public class OpenFileAction extends AbstractApplicationAction {
     @Override
     public void actionPerformed(ActionEvent evt) {
         final Application app = getApplication();
-        if (app.isEnabled()) {
-            app.setEnabled(false);
-            // Search for an empty view
-            View emptyView = app.getActiveView();
-            if (emptyView == null
-                    || !emptyView.isEmpty()
-                    || !emptyView.isEnabled()) {
-                emptyView = null;
+        if (!app.isEnabled()) {
+            return;
+        }
+
+        app.setEnabled(false);
+
+        final View view = getOrCreateView(app);
+        if (view == null) {
+            app.setEnabled(true);
+            return;
+        }
+
+        boolean disposeView = (view == null);
+
+        URIChooser chooser = configureURIChooser(view);
+
+        if (showDialog(chooser, app.getComponent()) == JFileChooser.APPROVE_OPTION) {
+            handleURISelection(app, view, chooser, disposeView);
+        } else {
+            cleanupView(app, view, disposeView);
+        }
+
+        app.setEnabled(true);
+    }
+
+    private View getOrCreateView(Application app) {
+        View emptyView = app.getActiveView();
+        if (emptyView == null || !emptyView.isEmpty() || !emptyView.isEnabled()) {
+            emptyView = null;
+        }
+
+        if (emptyView == null) {
+            View view = app.createView();
+            app.add(view);
+            return view;
+        } else {
+            return emptyView;
+        }
+    }
+
+
+
+    private URIChooser configureURIChooser(View view) {
+        URIChooser chooser = getChooser(view);
+        chooser.setDialogType(JFileChooser.OPEN_DIALOG);
+        return chooser;
+    }
+
+    private void handleURISelection(Application app, View view, URIChooser chooser, boolean disposeView) {
+        URI uri = chooser.getSelectedURI();
+
+        if (!app.getModel().isAllowMultipleViewsPerURI() && isURIAlreadyOpened(app, uri)) {
+            focusExistingView(app, uri, view, disposeView);
+            return;
+        }
+
+        openViewFromURI(view, uri, chooser);
+    }
+
+    private boolean isURIAlreadyOpened(Application app, URI uri) {
+        for (View v : app.getViews()) {
+            if (v.getURI() != null && v.getURI().equals(uri)) {
+                return true;
             }
-            final View view;
-            boolean disposeView;
-            if (emptyView == null) {
-                view = app.createView();
-                app.add(view);
-                disposeView = true;
-            } else {
-                view = emptyView;
-                disposeView = false;
-            }
-            URIChooser chooser = getChooser(view);
-            chooser.setDialogType(JFileChooser.OPEN_DIALOG);
-            if (showDialog(chooser, app.getComponent()) == JFileChooser.APPROVE_OPTION) {
-                app.show(view);
-                URI uri = chooser.getSelectedURI();
-                // Prevent same URI from being opened more than once
-                if (!getApplication().getModel().isAllowMultipleViewsPerURI()) {
-                    for (View v : getApplication().getViews()) {
-                        if (v.getURI() != null && v.getURI().equals(uri)) {
-                            v.getComponent().requestFocus();
-                            if (disposeView) {
-                                app.dispose(view);
-                            }
-                            app.setEnabled(true);
-                            return;
-                        }
-                    }
-                }
-                openViewFromURI(view, uri, chooser);
-            } else {
+        }
+        return false;
+    }
+
+    private void focusExistingView(Application app, URI uri, View view, boolean disposeView) {
+        for (View v : app.getViews()) {
+            if (v.getURI() != null && v.getURI().equals(uri)) {
+                v.getComponent().requestFocus();
                 if (disposeView) {
                     app.dispose(view);
                 }
-                app.setEnabled(true);
+                return;
             }
         }
     }
+
+    private void cleanupView(Application app, View view, boolean disposeView) {
+        if (disposeView) {
+            app.dispose(view);
+        }
+    }
+
 
     protected void openViewFromURI(final View view, final URI uri, final URIChooser chooser) {
         final Application app = getApplication();
         app.setEnabled(true);
         view.setEnabled(false);
-        // If there is another view with the same URI we set the multiple open
-        // id of our view to max(multiple open id) + 1.
+
+        // Set the multiple open ID
+        setMultipleOpenId(app, view);
+
+        // Perform file opening in a background worker
+        executeFileOpenWorker(app, view, uri, chooser);
+    }
+
+    private void setMultipleOpenId(Application app, View view) {
         int multipleOpenId = 1;
         for (View aView : app.views()) {
-            if (aView != view
-                    && aView.isEmpty()) {
+            if (aView != view && aView.isEmpty()) {
                 multipleOpenId = Math.max(multipleOpenId, aView.getMultipleOpenId() + 1);
             }
         }
         view.setMultipleOpenId(multipleOpenId);
         view.setEnabled(false);
-        // Open the file
-        new SwingWorker() {
+    }
+
+    private void executeFileOpenWorker(final Application app, final View view, final URI uri, final URIChooser chooser) {
+        new SwingWorker<Object, Void>() {
             @Override
             protected Object doInBackground() throws Exception {
-                boolean exists = true;
-                try {
-                    exists = new File(uri).exists();
-                } catch (IllegalArgumentException e) {
-                    // allowed empty
-                }
-                if (exists) {
-                    view.read(uri, chooser);
-                } else {
-                    ResourceBundleUtil labels = ResourceBundleUtil.getBundle("org.jhotdraw.app.Labels");
-                    throw new IOException(labels.getFormatted("file.open.fileDoesNotExist.message", URIUtil.getName(uri)));
-                }
-                return null;
+                return handleFileOpening(view, uri, chooser);
             }
 
             @Override
             protected void done() {
-                try {
-                    get();
-                    final Application app = getApplication();
-                    view.setURI(uri);
-                    view.setEnabled(true);
-                    Frame w = (Frame) SwingUtilities.getWindowAncestor(view.getComponent());
-                    if (w != null) {
-                        w.setExtendedState(w.getExtendedState() & ~Frame.ICONIFIED);
-                        w.toFront();
-                    }
-                    view.getComponent().requestFocus();
-                    app.addRecentURI(uri);
-                    app.setEnabled(true);
-                } catch (InterruptedException | ExecutionException ex) {
-                    Logger.getLogger(OpenFileAction.class.getName()).log(Level.SEVERE, null, ex);
-                    failed(ex);
-                }
+                handleFileOpenCompletion(app, view, uri, this); // Pass the SwingWorker instance
             }
 
             protected void failed(Throwable value) {
-                value.printStackTrace();
-                view.setEnabled(true);
-                app.setEnabled(true);
-                String message = value.getMessage() != null ? value.getMessage() : value.toString();
-                ResourceBundleUtil labels = ResourceBundleUtil.getBundle("org.jhotdraw.app.Labels");
-                JSheet.showMessageSheet(view.getComponent(),
-                        "<html>" + UIManager.getString("OptionPane.css")
-                        + "<b>" + labels.getFormatted("file.open.couldntOpen.message", URIUtil.getName(uri)) + "</b><p>"
-                        + ((message == null) ? "" : message),
-                        JOptionPane.ERROR_MESSAGE);
+                handleFileOpenFailure(app, view, uri, value);
             }
         }.execute();
     }
+
+    private boolean handleFileOpening(View view, URI uri, URIChooser chooser) throws IOException {
+        boolean exists = true;
+        try {
+            exists = new File(uri).exists();
+        } catch (IllegalArgumentException e) {
+            // allowed empty
+        }
+        if (exists) {
+            view.read(uri, chooser);
+        } else {
+            ResourceBundleUtil labels = ResourceBundleUtil.getBundle(LABELS_BUNDLE);
+            throw new IOException(labels.getFormatted("file.open.fileDoesNotExist.message", URIUtil.getName(uri)));
+        }
+        return exists;
+    }
+
+    private void handleFileOpenCompletion(Application app, View view, URI uri, SwingWorker<?, ?> worker) {
+        try {
+            worker.get(); // Retrieve the result of doInBackground
+            view.setURI(uri);
+            view.setEnabled(true);
+            bringWindowToFront(view);
+            app.addRecentURI(uri);
+            app.setEnabled(true);
+        } catch (InterruptedException | ExecutionException ex) {
+            Logger.getLogger(OpenFileAction.class.getName()).log(Level.SEVERE, null, ex);
+            handleFileOpenFailure(app, view, uri, ex);
+        }
+    }
+
+
+    private void handleFileOpenFailure(Application app, View view, URI uri, Throwable value) {
+        view.setEnabled(true);
+        app.setEnabled(true);
+        String message = value.getMessage() != null ? value.getMessage() : value.toString();
+        ResourceBundleUtil labels = ResourceBundleUtil.getBundle(LABELS_BUNDLE);
+        JSheet.showMessageSheet(view.getComponent(),
+                "<html>" + UIManager.getString("OptionPane.css")
+                        + "<b>" + labels.getFormatted("file.open.couldntOpen.message", URIUtil.getName(uri)) + "</b><p>"
+                        + ((message == null) ? "" : message),
+                JOptionPane.ERROR_MESSAGE);
+    }
+
+    private void bringWindowToFront(View view) {
+        Frame w = (Frame) SwingUtilities.getWindowAncestor(view.getComponent());
+        if (w != null) {
+            w.setExtendedState(w.getExtendedState() & ~Frame.ICONIFIED);
+            w.toFront();
+        }
+        view.getComponent().requestFocus();
+    }
+
 
     /**
      * We implement JFileChooser.showDialog by ourselves, so that we can center
