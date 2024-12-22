@@ -122,7 +122,7 @@ public class OpenFileAction extends AbstractApplicationAction {
         app.setEnabled(true);
     }
 
-    private View getOrCreateView(Application app) {
+    protected View getOrCreateView(Application app) {
         View emptyView = app.getActiveView();
         if (emptyView == null || !emptyView.isEmpty() || !emptyView.isEnabled()) {
             emptyView = null;
@@ -241,7 +241,7 @@ public class OpenFileAction extends AbstractApplicationAction {
         return exists;
     }
 
-    private void handleFileOpenCompletion(Application app, View view, URI uri, SwingWorker<?, ?> worker) {
+    protected void handleFileOpenCompletion(Application app, View view, URI uri, SwingWorker<?, ?> worker) {
         try {
             worker.get(); // Retrieve the result of doInBackground
             view.setURI(uri);
@@ -268,14 +268,17 @@ public class OpenFileAction extends AbstractApplicationAction {
                 JOptionPane.ERROR_MESSAGE);
     }
 
-    private void bringWindowToFront(View view) {
-        Frame w = (Frame) SwingUtilities.getWindowAncestor(view.getComponent());
-        if (w != null) {
-            w.setExtendedState(w.getExtendedState() & ~Frame.ICONIFIED);
-            w.toFront();
+    protected void bringWindowToFront(View view) {
+        Component component = view.getComponent();
+        if (component != null) {
+            Window window = SwingUtilities.getWindowAncestor(component);
+            if (window != null) {
+                window.setVisible(true);
+                window.toFront();  // This should trigger toFront() on the correct frame
+            }
         }
-        view.getComponent().requestFocus();
     }
+
 
 
     /**
