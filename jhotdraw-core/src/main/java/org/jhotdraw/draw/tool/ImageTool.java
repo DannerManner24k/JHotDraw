@@ -99,7 +99,7 @@ public class ImageTool extends CreationTool {
         }
     }
 
-    private File selectFileUsingFileDialog() {
+    public File selectFileUsingFileDialog() {
         getFileDialog().setVisible(true);
         if (getFileDialog().getFile() != null) {
             return new File(getFileDialog().getDirectory(), getFileDialog().getFile());
@@ -114,7 +114,7 @@ public class ImageTool extends CreationTool {
         return null;
     }
 
-    private void loadImage(File file, DrawingView view) {
+    public void loadImage(File file, DrawingView view) {
         final ImageHolderFigure loaderFigure = ((ImageHolderFigure) prototype.clone());
         new SwingWorker<Void, Void>() {
             @Override
@@ -142,7 +142,7 @@ public class ImageTool extends CreationTool {
         }
     }
 
-    private void handleNoFileSelected() {
+    public void handleNoFileSelected() {
         if (isToolDoneAfterCreation()) {
             fireToolDone();
         }
