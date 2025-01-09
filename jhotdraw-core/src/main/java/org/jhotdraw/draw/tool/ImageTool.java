@@ -10,7 +10,6 @@ package org.jhotdraw.draw.tool;
 import java.awt.*;
 import java.io.*;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
 import javax.swing.*;
 import org.jhotdraw.draw.AttributeKey;
 import org.jhotdraw.draw.DrawingEditor;
@@ -80,64 +79,80 @@ public class ImageTool extends CreationTool {
     @Override
     public void activate(DrawingEditor editor) {
         super.activate(editor);
-        final DrawingView v = getView();
-        if (v == null) {
+        final DrawingView view = getView();
+        if (view == null) {
             return;
         }
-        final File file;
-        if (useFileDialog) {
-            getFileDialog().setVisible(true);
-            if (getFileDialog().getFile() != null) {
-                file = new File(getFileDialog().getDirectory(), getFileDialog().getFile());
-            } else {
-                file = null;
-            }
-        } else {
-            if (getFileChooser().showOpenDialog(v.getComponent()) == JFileChooser.APPROVE_OPTION) {
-                file = getFileChooser().getSelectedFile();
-            } else {
-                file = null;
-            }
-        }
+        File file = selectFile(view);
         if (file != null) {
-            final ImageHolderFigure loaderFigure = ((ImageHolderFigure) prototype.clone());
-            new SwingWorker() {
-                @Override
-                protected Object doInBackground() throws Exception {
-                    loaderFigure.loadImage(file);
-                    return null;
-                }
-
-                @Override
-                protected void done() {
-                    try {
-                        get();  //will throw an ExecutionException if in doInBackground something went wrong.
-                        if (createdFigure == null) {
-                            ((ImageHolderFigure) prototype).setImage(loaderFigure.getImageData(), loaderFigure.getBufferedImage());
-                        } else {
-                            ((ImageHolderFigure) createdFigure).setImage(loaderFigure.getImageData(), loaderFigure.getBufferedImage());
-                        }
-                    } catch (IOException ex) {
-                        JOptionPane.showMessageDialog(v.getComponent(),
-                                ex.getMessage(),
-                                null,
-                                JOptionPane.ERROR_MESSAGE);
-                    } catch (InterruptedException | ExecutionException ex) {
-                        JOptionPane.showMessageDialog(v.getComponent(),
-                            ex.getMessage(),
-                            null,
-                            JOptionPane.ERROR_MESSAGE);
-                        getDrawing().remove(createdFigure);
-                        fireToolDone();
-                    }
-                }
-            }.execute();
+            loadImage(file, view);
         } else {
-            //getDrawing().remove(createdFigure);
-            if (isToolDoneAfterCreation()) {
-                fireToolDone();
-            }
+            handleNoFileSelected();
         }
+    }
+
+    private File selectFile(DrawingView view) {
+        if (useFileDialog) {
+            return selectFileUsingFileDialog();
+        } else {
+            return selectFileUsingFileChooser(view);
+        }
+    }
+
+    private File selectFileUsingFileDialog() {
+        getFileDialog().setVisible(true);
+        if (getFileDialog().getFile() != null) {
+            return new File(getFileDialog().getDirectory(), getFileDialog().getFile());
+        }
+        return null;
+    }
+
+    private File selectFileUsingFileChooser(DrawingView view) {
+        if (getFileChooser().showOpenDialog(view.getComponent()) == JFileChooser.APPROVE_OPTION) {
+            return getFileChooser().getSelectedFile();
+        }
+        return null;
+    }
+
+    private void loadImage(File file, DrawingView view) {
+        final ImageHolderFigure loaderFigure = ((ImageHolderFigure) prototype.clone());
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                loaderFigure.loadImage(file);
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                handleImageLoaded(loaderFigure, view);
+            }
+        }.execute();
+    }
+
+    private void handleImageLoaded(ImageHolderFigure loaderFigure, DrawingView view) {
+        try {
+            if (createdFigure == null) {
+                ((ImageHolderFigure) prototype).setImage(loaderFigure.getImageData(), loaderFigure.getBufferedImage());
+            } else {
+                ((ImageHolderFigure) createdFigure).setImage(loaderFigure.getImageData(), loaderFigure.getBufferedImage());
+            }
+        } catch (IOException ex) {
+            showErrorDialog(view, ex.getMessage());
+        }
+    }
+
+    private void handleNoFileSelected() {
+        if (isToolDoneAfterCreation()) {
+            fireToolDone();
+        }
+    }
+
+    private void showErrorDialog(DrawingView view, String message) {
+        JOptionPane.showMessageDialog(view.getComponent(),
+                message,
+                null,
+                JOptionPane.ERROR_MESSAGE);
     }
 
     private JFileChooser getFileChooser() {
